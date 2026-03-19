@@ -1,4 +1,4 @@
-# MRcML_Family
+# MRcMLFamily
 
 Mendelian Randomization with cML Family Methods for Multi-Ancestry Studies
 
@@ -15,7 +15,7 @@ Mendelian Randomization with cML Family Methods for Multi-Ancestry Studies
 install.packages("devtools")
 
 # Install MRcMLFamily from GitHub
-devtools::install_github("XMMMMddd/MRcML_Family/MRcMLFamily")
+devtools::install_github("XMMMMddd/MRcML_Family")
 ```
 
 ### From Local Source
