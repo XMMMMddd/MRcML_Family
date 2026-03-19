@@ -1,0 +1,11 @@
+Package: MRcMLFamily
+Type: Package
+Title: Mendelian Randomization with cML Family Methods
+Version: 1.0.0
+Authors@R: person("Author", "Name", email = "author@example.com", role = c("aut", "cre"))
+Description: Implements Mendelian Randomization methods using collaborative IV (cML) family
+    approaches for handling horizontal pleiotropy in multi-ancestry genetic studies.
+License: MIT
+Imports: Rcpp (>= 1.0.10), RcppArmadillo
+LinkingTo: Rcpp, RcppArmadillo
+RoxygenNote: 7.3.1
