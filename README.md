@@ -219,7 +219,7 @@ Bootstrap/Double-priming (DP) variance estimation version with visualization. Co
 
 **Usage:**
 ```r
-result <- MRcML_family_dp_ver2(
+result <- MRcML_family_dp(
   a_values,
   b_values,
   beta_hat_exp,
@@ -263,7 +263,7 @@ data <- generate_example_data(J = 100, seed = 789)
 n_snps <- nrow(data$beta_hat_exp)
 
 # Run MRcML-Family DP analysis with bootstrap
-result <- MRcML_family_dp_ver2(
+result <- MRcML_family_dp(
   a_values = 1:n_snps,
   b_values = 0:n_snps,
   beta_hat_exp = data$beta_hat_exp,
@@ -379,7 +379,7 @@ cat("BMA Alpha:", standard_result$alpha_bma, "\n")
 cat("BMA SE:", standard_result$se_bma, "\n")
 
 # 4. MRcML-Family with DP variance estimation
-dp_result <- MRcML_family_dp_ver2(
+dp_result <- MRcML_family_dp(
   a_values = 1:n_snps,
   b_values = 0:n_snps,
   beta_hat_exp = data$beta_hat_exp,
