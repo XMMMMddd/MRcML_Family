@@ -799,7 +799,7 @@ MRcML_family <- function(
 #' @return List with results (alpha_bma, se_bma, p_value), theta_list,
 #'   plot_density, and plot_bic
 #' @export
-MRcML_family_dp_ver2 <- function(
+MRcML_family_dp <- function(
     a_values,
     b_values,
     beta_hat_exp,

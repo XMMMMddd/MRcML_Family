@@ -213,7 +213,7 @@ head(result$results_with_weights)
 
 ---
 
-### 3. MRcML_family_dp_ver2()
+### 3. MRcML_family_dp()
 
 Bootstrap/Double-priming (DP) variance estimation version with visualization. Combines BIC model averaging with bootstrap-based uncertainty quantification.
 
@@ -330,7 +330,7 @@ Returns a list:
   - `bic`: Bayesian Information Criterion
   - `weight`: BIC weight for BMA
 
-### DP Version (`MRcML_family_dp_ver2()`)
+### DP Version (`MRcML_family_dp()`)
 
 Returns a list:
 - `results`: Data frame with columns:
