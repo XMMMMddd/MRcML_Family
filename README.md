@@ -226,7 +226,7 @@ result <- MRcML_family_dp(
   beta_hat_out,
   beta_sigma_exp,
   beta_sigma_out,
-  T = 100,
+  T = 10,
   n = 1000,
   p = 1,
   q = 1/3
@@ -259,7 +259,7 @@ result <- MRcML_family_dp(
 library(MRcMLFamily)
 
 # Generate example data
-data <- generate_example_data(J = 100, seed = 789)
+data <- generate_example_data(J = 10, seed = 789)
 n_snps <- nrow(data$beta_hat_exp)
 
 # Run MRcML-Family DP analysis with bootstrap
@@ -270,7 +270,7 @@ result <- MRcML_family_dp(
   beta_hat_out = data$beta_hat_out,
   beta_sigma_exp = data$beta_sigma_exp,
   beta_sigma_out = data$beta_sigma_out,
-  T = 100,  # 100 bootstrap replicates
+  T = 10,  # 10 bootstrap replicates (increase for real analysis)
   n = 1000,
   p = 1,
   q = 1/3
@@ -349,7 +349,7 @@ Returns a list:
 library(MRcMLFamily)
 
 # 1. Prepare your data (replace with real GWAS summary statistics)
-data <- generate_example_data(J = 100, seed = 42)
+data <- generate_example_data(J = 10, seed = 42)
 n_snps <- nrow(data$beta_hat_exp)
 
 # 2. Quick analysis with mr_family()
@@ -386,7 +386,7 @@ dp_result <- MRcML_family_dp(
   beta_hat_out = data$beta_hat_out,
   beta_sigma_exp = data$beta_sigma_exp,
   beta_sigma_out = data$beta_sigma_out,
-  T = 100,
+  T = 10,
   n = 1000,
   p = 1,
   q = 1/3
