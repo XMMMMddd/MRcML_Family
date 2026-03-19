@@ -46,6 +46,7 @@ R CMD INSTALL MRcMLFamily_1.0.0.tar.gz
 - R (>= 4.0)
 - Rcpp (>= 1.0.10)
 - RcppArmadillo
+- ggplot2 (for DP version visualization)
 
 These dependencies will be automatically installed when you install the package.
 
@@ -212,61 +213,23 @@ head(result$results_with_weights)
 
 ---
 
-### 3. cml_family_new()
+### 3. MRcML_family_dp_ver2()
 
-Alias for `MRcML_family()` with identical functionality.
+Bootstrap/Double-priming (DP) variance estimation version with visualization. Combines BIC model averaging with bootstrap-based uncertainty quantification.
 
 **Usage:**
 ```r
-result <- cml_family_new(
+result <- MRcML_family_dp_ver2(
   a_values,
   b_values,
   beta_hat_exp,
   beta_hat_out,
   beta_sigma_exp,
   beta_sigma_out,
+  T = 100,
   n = 1000,
   p = 1,
   q = 1/3
-)
-```
-
-**Example:**
-```r
-library(MRcMLFamily)
-
-# Same as MRcML_family but with different name
-data <- generate_example_data(J = 80, seed = 789)
-n_snps <- nrow(data$beta_hat_exp)
-
-result <- cml_family_new(
-  a_values = 1:n_snps,
-  b_values = 0:n_snps,
-  beta_hat_exp = data$beta_hat_exp,
-  beta_hat_out = data$beta_hat_out,
-  beta_sigma_exp = data$beta_sigma_exp,
-  beta_sigma_out = data$beta_sigma_out
-)
-```
-
----
-
-### 4. run_cml_family()
-
-Core iterative algorithm for cML family estimation with fixed (a, b).
-
-**Usage:**
-```r
-result <- run_cml_family(
-  beta_hat_exp,
-  beta_hat_out,
-  beta_sigma_exp,
-  beta_sigma_out,
-  a = 10,
-  b = 10,
-  alpha_init = 0.0,
-  max_iter = 100,
-  tol = 1e-6
 )
 ```
 
@@ -274,44 +237,55 @@ result <- run_cml_family(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
+| `a_values` | integer vector | 1:n_snps | Grid of a parameters |
+| `b_values` | integer vector | 0:n_snps | Grid of b parameters |
 | `beta_hat_exp` | matrix (J x 3) | - | Exposure beta estimates |
 | `beta_hat_out` | matrix (J x 3) | - | Outcome beta estimates |
 | `beta_sigma_exp` | list (3x3 matrices) | - | Exposure covariance matrices |
 | `beta_sigma_out` | list (3x3 matrices) | - | Outcome covariance matrices |
-| `a` | integer | 10 | Number of top SNPs for exposure |
-| `b` | integer | 10 | Number of top SNPs for outcome |
-| `alpha_init` | numeric | 0.0 | Initial alpha value |
-| `max_iter` | integer | 100 | Maximum iterations |
-| `tol` | numeric | 1e-6 | Convergence tolerance |
+| `T` | integer | 100 | Number of bootstrap replicates |
+| `n` | integer | 1000 | Sample size for BIC penalty |
+| `p` | numeric | 1 | Number of exposures |
+| `q` | numeric | 1/3 | Ratio parameter |
 
-**Returns:** List with:
-- `alpha`: Estimated causal effect
-- `gamma`: Estimated gamma values
-- `S_f`: Selected exposure SNP indices
-- `S_t`: Selected outcome SNP indices
+**Returns:** List with components:
+- `results`: Data frame with `alpha_bma`, `se_bma`, `p_value`
+- `theta_list`: Vector of bootstrap estimates
+- `plot_density`: Density plot of bootstrap distribution
+- `plot_bic`: BIC landscape heatmap
 
 **Example:**
 ```r
 library(MRcMLFamily)
 
 # Generate example data
-data <- generate_example_data(J = 50, seed = 111)
+data <- generate_example_data(J = 100, seed = 789)
+n_snps <- nrow(data$beta_hat_exp)
 
-# Run with specific (a, b)
-result <- run_cml_family(
+# Run MRcML-Family DP analysis with bootstrap
+result <- MRcML_family_dp_ver2(
+  a_values = 1:n_snps,
+  b_values = 0:n_snps,
   beta_hat_exp = data$beta_hat_exp,
   beta_hat_out = data$beta_hat_out,
   beta_sigma_exp = data$beta_sigma_exp,
   beta_sigma_out = data$beta_sigma_out,
-  a = 5,
-  b = 10,
-  alpha_init = 0.0
+  T = 100,  # 100 bootstrap replicates
+  n = 1000,
+  p = 1,
+  q = 1/3
 )
 
-# View results
-cat("Alpha estimate:", result$alpha, "\n")
-cat("Selected exposure SNPs (S_f):", result$S_f, "\n")
-cat("Selected outcome SNPs (S_t):", result$S_t, "\n")
+# Access results
+print(result$results)
+#   alpha_bma  se_bma p_value
+# 1    0.215   0.189   0.045
+
+# View bootstrap distribution
+print(result$plot_density)
+
+# View BIC landscape
+print(result$plot_bic)
 ```
 
 ---
@@ -320,6 +294,7 @@ cat("Selected outcome SNPs (S_t):", result$S_t, "\n")
 
 - **a (horizontal pleiotropy)**: Number of top SNPs to select based on exposure statistics. Controls the degree of horizontal pleiotropy modeling.
 - **b (vertical pleiotropy)**: Number of top SNPs to select based on outcome statistics. Controls vertical pleiotropy modeling.
+- **T**: Number of bootstrap replicates for DP variance estimation. More replicates = more accurate variance but slower.
 - **n**: Sample size for BIC penalty calculation
 - **p**: Number of exposures
 - **q**: Ratio parameter for model complexity penalty (default 1/3)
@@ -329,6 +304,7 @@ cat("Selected outcome SNPs (S_t):", result$S_t, "\n")
 - For small SNP sets (J < 50): Use `a_values = 1:J`, `b_values = 0:J`
 - For large SNP sets (J > 100): Use smaller grid, e.g., `a_values = c(5, 10, 20, 50)`, `b_values = c(0, 5, 10, 20)`
 - Larger a/b values increase model complexity; use BIC to select optimal
+- For DP version, `T = 100` is usually sufficient; increase to 200-500 for final analyses
 
 ---
 
@@ -341,7 +317,7 @@ Returns a data frame:
 - `alpha_se`: Standard error
 - `p_value`: Two-sided p-value (from normal distribution)
 
-### Advanced MRcML-Family (`MRcML_family()`)
+### Standard MRcML-Family (`MRcML_family()`)
 
 Returns a list:
 - `alpha_bma`: Bayesian Model Averaging estimate
@@ -353,6 +329,17 @@ Returns a list:
   - `p_value`: Two-sided p-value
   - `bic`: Bayesian Information Criterion
   - `weight`: BIC weight for BMA
+
+### DP Version (`MRcML_family_dp_ver2()`)
+
+Returns a list:
+- `results`: Data frame with columns:
+  - `alpha_bma`: Causal effect estimate
+  - `se_bma`: DP-adjusted standard error
+  - `p_value`: Two-sided p-value
+- `theta_list`: Bootstrap estimates for diagnostic plots
+- `plot_density`: Density plot of bootstrap distribution
+- `plot_bic`: BIC landscape heatmap
 
 ---
 
@@ -374,8 +361,8 @@ quick_result <- mr_family(
 )
 print(quick_result)
 
-# 3. Comprehensive analysis with MRcML_family()
-full_result <- MRcML_family(
+# 3. Standard MRcML-Family with BIC model averaging
+standard_result <- MRcML_family(
   a_values = 1:n_snps,
   b_values = 0:n_snps,
   beta_hat_exp = data$beta_hat_exp,
@@ -387,14 +374,34 @@ full_result <- MRcML_family(
   q = 1/3
 )
 
-# 4. Extract results
-cat("\n=== MRcML-Family Results ===\n")
-cat("BMA Alpha:", full_result$alpha_bma, "\n")
-cat("BMA SE:", full_result$se_bma, "\n")
+cat("\n=== Standard MRcML-Family Results ===\n")
+cat("BMA Alpha:", standard_result$alpha_bma, "\n")
+cat("BMA SE:", standard_result$se_bma, "\n")
 
-# 5. Find best model by BIC weight
-best_model <- full_result$results_with_weights[
-  which.max(full_result$results_with_weights$weight),
+# 4. MRcML-Family with DP variance estimation
+dp_result <- MRcML_family_dp_ver2(
+  a_values = 1:n_snps,
+  b_values = 0:n_snps,
+  beta_hat_exp = data$beta_hat_exp,
+  beta_hat_out = data$beta_hat_out,
+  beta_sigma_exp = data$beta_sigma_exp,
+  beta_sigma_out = data$beta_sigma_out,
+  T = 100,
+  n = 1000,
+  p = 1,
+  q = 1/3
+)
+
+cat("\n=== MRcML-Family DP Results ===\n")
+print(dp_result$results)
+
+# 5. Visualize results
+print(dp_result$plot_density)
+print(dp_result$plot_bic)
+
+# 6. Find best model by BIC weight
+best_model <- standard_result$results_with_weights[
+  which.max(standard_result$results_with_weights$weight),
 ]
 cat("\nBest model (a, b):", best_model$a, best_model$b, "\n")
 cat("BIC weight:", best_model$weight, "\n")
@@ -411,6 +418,7 @@ The package implements:
 3. **Robust Estimation**: Multi-start strategies with BIC-weighted aggregation
 4. **Variance Estimation**: Fisher information-based standard errors
 5. **Bayesian Model Averaging**: Weighted combination across candidate models
+6. **Bootstrap/DP Variance**: Double-priming variance estimation for robust uncertainty quantification
 
 ## License
 

@@ -781,24 +781,42 @@ MRcML_family <- function(
     bic_weighted
 }
 
-#' Alias for MRcML_family
+#' MRcML-Family with Double-Priming (DP) Variance Estimation
 #'
-#' @rdname MRcML_family
+#' Performs MRcML-Family analysis with bootstrap-based DP variance estimation
+#' and returns diagnostic plots.
+#'
+#' @param a_values Vector of a parameters (horizontal pleiotropy). Default: 1:n_snps
+#' @param b_values Vector of b parameters (vertical pleiotropy). Default: 0:n_snps
+#' @param beta_hat_exp Exposure beta estimates (J x 3 matrix)
+#' @param beta_hat_out Outcome beta estimates (J x 3 matrix)
+#' @param beta_sigma_exp Exposure covariance matrices (list of 3x3 matrices)
+#' @param beta_sigma_out Outcome covariance matrices (list of 3x3 matrices)
+#' @param T Number of bootstrap replicates (default 100)
+#' @param n Sample size (default 1000)
+#' @param p Number of exposures (default 1)
+#' @param q Ratio parameter (default 1/3)
+#' @return List with results (alpha_bma, se_bma, p_value), theta_list,
+#'   plot_density, and plot_bic
 #' @export
-cml_family_new <- function(
+MRcML_family_dp_ver2 <- function(
     a_values,
     b_values,
     beta_hat_exp,
     beta_hat_out,
     beta_sigma_exp,
     beta_sigma_out,
+    T = 100,
     n = 1000,
     p = 1,
     q = 1 / 3
 ) {
-    MRcML_family(
-        a_values = a_values,
-        b_values = b_values,
+    n_snps <- nrow(beta_hat_exp)
+
+    # Original BIC-based model averaging on full data
+    alpha_ma <- MRcML_family(
+        a_values = 1:n_snps,
+        b_values = 0:n_snps,
         beta_hat_exp = beta_hat_exp,
         beta_hat_out = beta_hat_out,
         beta_sigma_exp = beta_sigma_exp,
@@ -806,5 +824,177 @@ cml_family_new <- function(
         n = n,
         p = p,
         q = q
+    )
+
+    # Bootstrap resampling for DP variance
+    sample_idx <- sample(1:n_snps, T * n_snps, replace = TRUE)
+    theta_list <- numeric(T)
+    theta_se_list <- numeric(T)
+
+    for (i in 1:T) {
+        index <- n_snps * (i - 1) + 1
+        sel <- sample_idx[index:(index + n_snps - 1)]
+
+        point_t <- MRcML_family(
+            a_values = 1:n_snps,
+            b_values = 0:n_snps,
+            beta_hat_exp = beta_hat_exp[sel, , drop = FALSE],
+            beta_hat_out = beta_hat_out[sel, , drop = FALSE],
+            beta_sigma_exp = beta_sigma_exp[sel],
+            beta_sigma_out = beta_sigma_out[sel],
+            n = n,
+            p = p,
+            q = q
+        )
+
+        theta_list[i] <- point_t$alpha_bma
+        theta_se_list[i] <- point_t$se_bma
+    }
+
+    # DP variance integration
+    theta_var <- var(theta_list)
+    z_fenzi <- mean(theta_se_list) - sqrt(theta_var)
+    z_fenmu <- sqrt(var(theta_se_list) + 2 / (T - 1) * theta_var^2)
+    z <- abs(z_fenzi / z_fenmu)
+    z_p_value <- pnorm(z, lower.tail = FALSE)
+
+    alpha_final <- alpha_ma$alpha_bma
+    se_final <- NA_real_
+    p_final <- NA_real_
+
+    if (alpha_ma$se_bma > sqrt(theta_var)) {
+        if (z_p_value < 0.05) {
+            se_final <- NA_real_
+            p_final <- NA_real_
+        } else {
+            se_final <- alpha_ma$se_bma
+            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / alpha_ma$se_bma), lower.tail = FALSE)
+        }
+    } else {
+        if (z_p_value < 0.05) {
+            se_final <- sqrt(theta_var)
+            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / sqrt(theta_var)), lower.tail = FALSE)
+        } else {
+            se_final <- sqrt(theta_var)
+            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / alpha_ma$se_bma), lower.tail = FALSE)
+        }
+    }
+
+    result <- data.frame(
+        alpha_bma = alpha_final,
+        se_bma = se_final,
+        p_value = p_final
+    )
+
+    # Generate plots
+    x <- theta_list
+    x <- x[is.finite(x)]
+
+    if (length(x) > 1) {
+        s <- stats::sd(x)
+        qs <- stats::quantile(x, c(0.025, 0.975), na.rm = TRUE)
+        dens <- stats::density(x, adjust = 1.0, n = 2048)
+        df_dens <- data.frame(x = dens$x, y = dens$y)
+        df_hist <- data.frame(x = x)
+        df_shade <- subset(df_dens, x >= qs[1] & x <= qs[2])
+
+        col_primary <- "#4061a0"
+        col_secondary <- "#77bbdd"
+        col_shade <- "#b3cde3"
+
+        plot_density <- ggplot2::ggplot(df_hist, ggplot2::aes(x)) +
+            ggplot2::geom_histogram(
+                ggplot2::aes(y = ggplot2::after_stat(density)),
+                bins = 40,
+                fill = col_secondary,
+                alpha = 0.35,
+                color = NA
+            ) +
+            ggplot2::geom_area(
+                data = df_shade,
+                ggplot2::aes(x, y),
+                alpha = 0.25,
+                fill = col_shade
+            ) +
+            ggplot2::geom_line(
+                data = df_dens,
+                ggplot2::aes(x, y),
+                linewidth = 1.1,
+                color = col_primary
+            ) +
+            ggplot2::geom_rug(alpha = 0.35, sides = "b") +
+            ggplot2::labs(
+                title = "MRcML-family-MA-DP - Sampling Distribution",
+                subtitle = sprintf(
+                    "T = %d, sd = %.3f; 95%% CI [%.3f, %.3f]",
+                    length(x), s, qs[1], qs[2]
+                ),
+                x = NULL,
+                y = "Density"
+            ) +
+            ggplot2::theme_minimal(base_size = 13)
+    } else {
+        plot_density <- NULL
+    }
+
+    # BIC landscape plot
+    a_tbl <- alpha_ma$results_with_weights
+    abic_all <- a_tbl[, c("a", "b", "bic"), drop = FALSE]
+    abic_obs <- abic_all[!is.na(abic_all$bic), , drop = FALSE]
+
+    if (nrow(abic_obs) > 0) {
+        best <- abic_obs[which.min(abic_obs$bic), , drop = FALSE]
+        a_vals_full <- sort(unique(abic_all$a))
+        b_vals_full <- sort(unique(abic_all$b))
+
+        full_grid <- expand.grid(a = a_vals_full, b = b_vals_full, KEEP.OUT.ATTRS = FALSE)
+        full_grid <- merge(full_grid, abic_all, by = c("a", "b"), all.x = TRUE)
+
+        plot_bic <- ggplot2::ggplot() +
+            ggplot2::geom_tile(
+                data = full_grid,
+                ggplot2::aes(x = a, y = b),
+                fill = "white",
+                alpha = 0.4,
+                color = "grey90"
+            ) +
+            ggplot2::geom_tile(
+                data = abic_obs,
+                ggplot2::aes(x = a, y = b, fill = bic),
+                color = "grey90"
+            ) +
+            ggplot2::scale_fill_gradient(
+                low = col_secondary,
+                high = col_primary,
+                name = "BIC\n(lower is better)"
+            ) +
+            ggplot2::geom_point(
+                data = best,
+                ggplot2::aes(x = a, y = b),
+                size = 3.2,
+                shape = 21,
+                fill = col_primary,
+                color = "white",
+                stroke = 0.5
+            ) +
+            ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+            ggplot2::scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+            ggplot2::coord_fixed() +
+            ggplot2::labs(
+                title = "BIC Landscape over (a, b)",
+                x = "a",
+                y = "b"
+            ) +
+            ggplot2::theme_minimal(base_size = 13) +
+            ggplot2::theme(legend.position = "bottom")
+    } else {
+        plot_bic <- NULL
+    }
+
+    list(
+        results = result,
+        theta_list = theta_list,
+        plot_density = plot_density,
+        plot_bic = plot_bic
     )
 }
