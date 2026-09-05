@@ -781,10 +781,69 @@ MRcML_family <- function(
     bic_weighted
 }
 
-#' MRcML-Family with Double-Priming (DP) Variance Estimation
+#' Helper for Gaussian data perturbation covariance factors
 #'
-#' Performs MRcML-Family analysis with bootstrap-based DP variance estimation
-#' and returns diagnostic plots.
+#' @keywords internal
+.dp_covariance_factor <- function(sigma,
+                                  expected_dim,
+                                  label,
+                                  eigen_tol = 1e-10) {
+    sigma <- as.matrix(sigma)
+
+    if (!is.numeric(sigma) ||
+        !identical(dim(sigma), c(expected_dim, expected_dim)) ||
+        any(!is.finite(sigma))) {
+        stop(sprintf("%s must be a finite %d x %d numeric matrix.",
+                     label, expected_dim, expected_dim))
+    }
+
+    matrix_scale <- max(1, max(abs(sigma)))
+    if (max(abs(sigma - t(sigma))) > 1e-8 * matrix_scale) {
+        stop(sprintf("%s must be symmetric.", label))
+    }
+
+    sigma <- (sigma + t(sigma)) / 2
+    eig <- eigen(sigma, symmetric = TRUE)
+    if (min(eig$values) < -eigen_tol * matrix_scale) {
+        stop(sprintf("%s must be positive semidefinite.", label))
+    }
+
+    # Tolerate tiny negative eigenvalues caused by numerical error.
+    sqrt_values <- sqrt(pmax(eig$values, 0))
+    sweep(eig$vectors, 2L, sqrt_values, FUN = "*")
+}
+
+#' Validate the (a, b) grid used by DP perturbations
+#'
+#' @keywords internal
+.dp_family_grid <- function(a_values, b_values, n_snps) {
+    validate_grid_values <- function(x, name) {
+        if (!is.numeric(x) ||
+            length(x) == 0L ||
+            any(!is.finite(x)) ||
+            any(x != round(x)) ||
+            any(x < 0) ||
+            any(x > n_snps)) {
+            stop(sprintf("%s must contain integers from 0 through the SNP count.", name))
+        }
+        x <- as.integer(x)
+        if (anyDuplicated(x)) {
+            stop(sprintf("%s must not contain duplicate values.", name))
+        }
+        x
+    }
+
+    a_values <- validate_grid_values(a_values, "a_values")
+    b_values <- validate_grid_values(b_values, "b_values")
+    do.call(rbind, lapply(a_values, function(a) {
+        data.frame(a = rep.int(a, length(b_values)), b = b_values)
+    }))
+}
+
+#' MRcML-Family with Gaussian data perturbation (DP) variance estimation
+#'
+#' Perturbs the GWAS summary effects while keeping the SNP set fixed, then
+#' refits the complete MRcML-Family model for every perturbation.
 #'
 #' @param a_values Vector of a parameters (horizontal pleiotropy). Default: 1:n_snps
 #' @param b_values Vector of b parameters (vertical pleiotropy). Default: 0:n_snps
@@ -792,12 +851,16 @@ MRcML_family <- function(
 #' @param beta_hat_out Outcome beta estimates (J x 3 matrix)
 #' @param beta_sigma_exp Exposure covariance matrices (list of 3x3 matrices)
 #' @param beta_sigma_out Outcome covariance matrices (list of 3x3 matrices)
-#' @param T Number of bootstrap replicates (default 100)
+#' @param T Number of Gaussian data perturbations (default 100)
 #' @param n Sample size (default 1000)
 #' @param p Number of exposures (default 1)
 #' @param q Ratio parameter (default 1/3)
-#' @return List with results (alpha_bma, se_bma, p_value), theta_list,
-#'   plot_density, and plot_bic
+#' @param beta_sigma_cross Optional exposure-outcome cross-covariance matrices
+#' @param random_seed Non-negative integer seed, or NULL (default 0)
+#' @param min_success Minimum fraction of successful perturbations required
+#' @param return_details Whether to return perturbation diagnostics
+#' @return Data frame with alpha_bma, se_bma, and p_value. With
+#'   return_details = TRUE, returns the data frame plus perturbation details.
 #' @export
 MRcML_family_dp <- function(
     a_values,
@@ -809,192 +872,239 @@ MRcML_family_dp <- function(
     T = 100,
     n = 1000,
     p = 1,
-    q = 1 / 3
+    q = 1 / 3,
+    beta_sigma_cross = NULL,
+    random_seed = 0,
+    min_success = 0.8,
+    return_details = FALSE
 ) {
-    n_snps <- nrow(beta_hat_exp)
+    beta_hat_exp <- as.matrix(beta_hat_exp)
+    beta_hat_out <- as.matrix(beta_hat_out)
 
-    # Original BIC-based model averaging on full data
-    alpha_ma <- MRcML_family(
-        a_values = 1:n_snps,
-        b_values = 0:n_snps,
-        beta_hat_exp = beta_hat_exp,
-        beta_hat_out = beta_hat_out,
-        beta_sigma_exp = beta_sigma_exp,
-        beta_sigma_out = beta_sigma_out,
-        n = n,
-        p = p,
-        q = q
-    )
-
-    # Bootstrap resampling for DP variance
-    sample_idx <- sample(1:n_snps, T * n_snps, replace = TRUE)
-    theta_list <- numeric(T)
-    theta_se_list <- numeric(T)
-
-    for (i in 1:T) {
-        index <- n_snps * (i - 1) + 1
-        sel <- sample_idx[index:(index + n_snps - 1)]
-
-        point_t <- MRcML_family(
-            a_values = 1:n_snps,
-            b_values = 0:n_snps,
-            beta_hat_exp = beta_hat_exp[sel, , drop = FALSE],
-            beta_hat_out = beta_hat_out[sel, , drop = FALSE],
-            beta_sigma_exp = beta_sigma_exp[sel],
-            beta_sigma_out = beta_sigma_out[sel],
-            n = n,
-            p = p,
-            q = q
-        )
-
-        theta_list[i] <- point_t$alpha_bma
-        theta_se_list[i] <- point_t$se_bma
+    if (!is.numeric(beta_hat_exp) ||
+        !is.numeric(beta_hat_out) ||
+        any(!is.finite(beta_hat_exp)) ||
+        any(!is.finite(beta_hat_out)) ||
+        !identical(dim(beta_hat_exp), dim(beta_hat_out))) {
+        stop("beta_hat_exp and beta_hat_out must be finite numeric matrices with matching dimensions.")
     }
 
-    # DP variance integration
-    theta_var <- var(theta_list)
-    z_fenzi <- mean(theta_se_list) - sqrt(theta_var)
-    z_fenmu <- sqrt(var(theta_se_list) + 2 / (T - 1) * theta_var^2)
-    z <- abs(z_fenzi / z_fenmu)
-    z_p_value <- pnorm(z, lower.tail = FALSE)
-
-    alpha_final <- alpha_ma$alpha_bma
-    se_final <- NA_real_
-    p_final <- NA_real_
-
-    if (alpha_ma$se_bma > sqrt(theta_var)) {
-        if (z_p_value < 0.05) {
-            se_final <- NA_real_
-            p_final <- NA_real_
-        } else {
-            se_final <- alpha_ma$se_bma
-            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / alpha_ma$se_bma), lower.tail = FALSE)
+    n_snps <- nrow(beta_hat_exp)
+    effect_dim <- ncol(beta_hat_exp)
+    if (n_snps < 1L || effect_dim != 3L) {
+        stop("beta_hat_exp and beta_hat_out must be SNP-by-3 matrices.")
+    }
+    if (!is.list(beta_sigma_exp) ||
+        !is.list(beta_sigma_out) ||
+        length(beta_sigma_exp) != n_snps ||
+        length(beta_sigma_out) != n_snps) {
+        stop("beta_sigma_exp and beta_sigma_out must be covariance-matrix lists with one element per SNP.")
+    }
+    if (length(T) != 1L ||
+        !is.finite(T) ||
+        T != round(T) ||
+        T < 2L) {
+        stop("T must be an integer greater than or equal to 2.")
+    }
+    T <- as.integer(T)
+    if (length(min_success) != 1L ||
+        !is.finite(min_success) ||
+        min_success <= 0 ||
+        min_success > 1) {
+        stop("min_success must be in (0, 1].")
+    }
+    if (!is.null(random_seed)) {
+        if (length(random_seed) != 1L ||
+            !is.finite(random_seed) ||
+            random_seed < 0 ||
+            random_seed != round(random_seed)) {
+            stop("random_seed must be a non-negative integer or NULL.")
         }
+        if (random_seed > 0) set.seed(as.integer(random_seed))
+    }
+
+    grid <- .dp_family_grid(a_values, b_values, n_snps)
+    a_values_dp <- grid$a[!duplicated(grid$a)]
+    b_values_dp <- grid$b[!duplicated(grid$b)]
+    required_success <- max(2L, ceiling(min_success * T))
+
+    sigma_exp <- lapply(beta_sigma_exp, as.matrix)
+    sigma_out <- lapply(beta_sigma_out, as.matrix)
+
+    # Without sample overlap, perturb exposure and outcome effects independently.
+    # With sample overlap, beta_sigma_cross[[j]] is the cross-covariance for SNP j.
+    if (is.null(beta_sigma_cross)) {
+        factor_exp <- lapply(seq_len(n_snps), function(j) {
+            .dp_covariance_factor(
+                sigma_exp[[j]], effect_dim,
+                sprintf("beta_sigma_exp[[%d]]", j)
+            )
+        })
+        factor_out <- lapply(seq_len(n_snps), function(j) {
+            .dp_covariance_factor(
+                sigma_out[[j]], effect_dim,
+                sprintf("beta_sigma_out[[%d]]", j)
+            )
+        })
+        factor_joint <- NULL
     } else {
-        if (z_p_value < 0.05) {
-            se_final <- sqrt(theta_var)
-            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / sqrt(theta_var)), lower.tail = FALSE)
-        } else {
-            se_final <- sqrt(theta_var)
-            p_final <- 2 * pnorm(abs(alpha_ma$alpha_bma / alpha_ma$se_bma), lower.tail = FALSE)
+        if (!is.list(beta_sigma_cross) || length(beta_sigma_cross) != n_snps) {
+            stop("beta_sigma_cross must be NULL or a list with one matrix per SNP.")
         }
+        sigma_cross <- lapply(beta_sigma_cross, as.matrix)
+        factor_joint <- lapply(seq_len(n_snps), function(j) {
+            cross_j <- sigma_cross[[j]]
+            if (!is.numeric(cross_j) ||
+                !identical(dim(cross_j), c(effect_dim, effect_dim)) ||
+                any(!is.finite(cross_j))) {
+                stop(sprintf("beta_sigma_cross[[%d]] must be a finite 3 x 3 numeric matrix.", j))
+            }
+            joint_sigma <- rbind(
+                cbind(sigma_exp[[j]], cross_j),
+                cbind(t(cross_j), sigma_out[[j]])
+            )
+            .dp_covariance_factor(
+                joint_sigma, 2L * effect_dim,
+                sprintf("joint exposure-outcome covariance for SNP %d", j)
+            )
+        })
+        factor_exp <- NULL
+        factor_out <- NULL
+    }
+
+    theta_list <- rep(NA_real_, T)
+    theta_se_list <- rep(NA_real_, T)
+    fit_errors <- rep(NA_character_, T)
+
+    for (t in seq_len(T)) {
+        beta_hat_exp_t <- beta_hat_exp
+        beta_hat_out_t <- beta_hat_out
+
+        for (j in seq_len(n_snps)) {
+            if (is.null(factor_joint)) {
+                beta_hat_exp_t[j, ] <- beta_hat_exp[j, ] +
+                    drop(factor_exp[[j]] %*% rnorm(effect_dim))
+                beta_hat_out_t[j, ] <- beta_hat_out[j, ] +
+                    drop(factor_out[[j]] %*% rnorm(effect_dim))
+            } else {
+                perturbation <- drop(
+                    factor_joint[[j]] %*% rnorm(2L * effect_dim)
+                )
+                beta_hat_exp_t[j, ] <- beta_hat_exp[j, ] +
+                    perturbation[seq_len(effect_dim)]
+                beta_hat_out_t[j, ] <- beta_hat_out[j, ] +
+                    perturbation[effect_dim + seq_len(effect_dim)]
+            }
+        }
+
+        fit_t <- tryCatch(
+            MRcML_family(
+                a_values = a_values_dp,
+                b_values = b_values_dp,
+                beta_hat_exp = beta_hat_exp_t,
+                beta_hat_out = beta_hat_out_t,
+                beta_sigma_exp = sigma_exp,
+                beta_sigma_out = sigma_out,
+                n = n,
+                p = p,
+                q = q
+            ),
+            error = function(e) {
+                fit_errors[t] <<- conditionMessage(e)
+                NULL
+            }
+        )
+
+        if (is.null(fit_t) ||
+            !is.list(fit_t) ||
+            is.null(fit_t$alpha_bma)) {
+            next
+        }
+
+        theta_t <- suppressWarnings(as.numeric(fit_t$alpha_bma[1]))
+        se_t <- suppressWarnings(as.numeric(fit_t$se_bma[1]))
+        if (is.finite(theta_t)) theta_list[t] <- theta_t
+        if (is.finite(se_t)) theta_se_list[t] <- se_t
+    }
+
+    fit_success <- is.finite(theta_list)
+    n_success <- sum(fit_success)
+    empty_result <- data.frame(
+        alpha_bma = NA_real_,
+        se_bma = NA_real_,
+        p_value = NA_real_
+    )
+    if (n_success < required_success) {
+        warning(sprintf(
+            "MRcML_family succeeded for only %d/%d perturbations; at least %d are required, returning NA.",
+            n_success, T, required_success
+        ))
+        if (isTRUE(return_details)) {
+            return(list(
+                results = empty_result,
+                method = "Gaussian data perturbation",
+                T = T,
+                n_successful_fits = n_success,
+                required_success = required_success,
+                perturbations = list(
+                    alpha_bma = theta_list,
+                    se_bma = theta_se_list,
+                    fit_errors = fit_errors
+                )
+            ))
+        }
+        attr(empty_result, "dp_diagnostics") <- list(
+            T = T,
+            n_successful_fits = n_success,
+            required_success = required_success
+        )
+        return(empty_result)
+    }
+
+    # DP estimate and standard error are the mean and empirical SD of the
+    # complete BMA estimates across perturbations.
+    alpha_dp <- mean(theta_list[fit_success])
+    se_dp <- sd(theta_list[fit_success])
+    p_dp <- if (is.finite(se_dp) && se_dp > 0) {
+        2 * pnorm(abs(alpha_dp / se_dp), lower.tail = FALSE)
+    } else {
+        NA_real_
     }
 
     result <- data.frame(
-        alpha_bma = alpha_final,
-        se_bma = se_final,
-        p_value = p_final
+        alpha_bma = alpha_dp,
+        se_bma = se_dp,
+        p_value = p_dp
     )
 
-    # Generate plots
-    x <- theta_list
-    x <- x[is.finite(x)]
-
-    if (length(x) > 1) {
-        s <- stats::sd(x)
-        qs <- stats::quantile(x, c(0.025, 0.975), na.rm = TRUE)
-        dens <- stats::density(x, adjust = 1.0, n = 2048)
-        df_dens <- data.frame(x = dens$x, y = dens$y)
-        df_hist <- data.frame(x = x)
-        df_shade <- subset(df_dens, x >= qs[1] & x <= qs[2])
-
-        col_primary <- "#4061a0"
-        col_secondary <- "#77bbdd"
-        col_shade <- "#b3cde3"
-
-        plot_density <- ggplot2::ggplot(df_hist, ggplot2::aes(x)) +
-            ggplot2::geom_histogram(
-                ggplot2::aes(y = ggplot2::after_stat(density)),
-                bins = 40,
-                fill = col_secondary,
-                alpha = 0.35,
-                color = NA
-            ) +
-            ggplot2::geom_area(
-                data = df_shade,
-                ggplot2::aes(x, y),
-                alpha = 0.25,
-                fill = col_shade
-            ) +
-            ggplot2::geom_line(
-                data = df_dens,
-                ggplot2::aes(x, y),
-                linewidth = 1.1,
-                color = col_primary
-            ) +
-            ggplot2::geom_rug(alpha = 0.35, sides = "b") +
-            ggplot2::labs(
-                title = "MRcML-family-MA-DP - Sampling Distribution",
-                subtitle = sprintf(
-                    "T = %d, sd = %.3f; 95%% CI [%.3f, %.3f]",
-                    length(x), s, qs[1], qs[2]
-                ),
-                x = NULL,
-                y = "Density"
-            ) +
-            ggplot2::theme_minimal(base_size = 13)
-    } else {
-        plot_density <- NULL
-    }
-
-    # BIC landscape plot
-    a_tbl <- alpha_ma$results_with_weights
-    abic_all <- a_tbl[, c("a", "b", "bic"), drop = FALSE]
-    abic_obs <- abic_all[!is.na(abic_all$bic), , drop = FALSE]
-
-    if (nrow(abic_obs) > 0) {
-        best <- abic_obs[which.min(abic_obs$bic), , drop = FALSE]
-        a_vals_full <- sort(unique(abic_all$a))
-        b_vals_full <- sort(unique(abic_all$b))
-
-        full_grid <- expand.grid(a = a_vals_full, b = b_vals_full, KEEP.OUT.ATTRS = FALSE)
-        full_grid <- merge(full_grid, abic_all, by = c("a", "b"), all.x = TRUE)
-
-        plot_bic <- ggplot2::ggplot() +
-            ggplot2::geom_tile(
-                data = full_grid,
-                ggplot2::aes(x = a, y = b),
-                fill = "white",
-                alpha = 0.4,
-                color = "grey90"
-            ) +
-            ggplot2::geom_tile(
-                data = abic_obs,
-                ggplot2::aes(x = a, y = b, fill = bic),
-                color = "grey90"
-            ) +
-            ggplot2::scale_fill_gradient(
-                low = col_secondary,
-                high = col_primary,
-                name = "BIC\n(lower is better)"
-            ) +
-            ggplot2::geom_point(
-                data = best,
-                ggplot2::aes(x = a, y = b),
-                size = 3.2,
-                shape = 21,
-                fill = col_primary,
-                color = "white",
-                stroke = 0.5
-            ) +
-            ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
-            ggplot2::scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
-            ggplot2::coord_fixed() +
-            ggplot2::labs(
-                title = "BIC Landscape over (a, b)",
-                x = "a",
-                y = "b"
-            ) +
-            ggplot2::theme_minimal(base_size = 13) +
-            ggplot2::theme(legend.position = "bottom")
-    } else {
-        plot_bic <- NULL
-    }
-
-    list(
-        results = result,
-        theta_list = theta_list,
-        plot_density = plot_density,
-        plot_bic = plot_bic
+    diagnostics <- list(
+        method = if (is.null(beta_sigma_cross)) {
+            "Gaussian data perturbation (independent exposure/outcome samples)"
+        } else {
+            "Joint Gaussian data perturbation (exposure/outcome cross-covariance supplied)"
+        },
+        T = T,
+        n_successful_fits = n_success,
+        required_success = required_success,
+        mean_analytic_se = if (any(is.finite(theta_se_list[fit_success]))) {
+            mean(theta_se_list[fit_success], na.rm = TRUE)
+        } else {
+            NA_real_
+        }
     )
+
+    if (isTRUE(return_details)) {
+        return(c(
+            list(results = result),
+            diagnostics,
+            list(perturbations = list(
+                alpha_bma = theta_list,
+                se_bma = theta_se_list,
+                fit_errors = fit_errors
+            ))
+        ))
+    }
+
+    attr(result, "dp_diagnostics") <- diagnostics
+    result
 }

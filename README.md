@@ -46,7 +46,7 @@ R CMD INSTALL MRcMLFamily_1.0.0.tar.gz
 - R (>= 4.0)
 - Rcpp (>= 1.0.10)
 - RcppArmadillo
-- ggplot2 (for DP version visualization)
+- ggplot2 and scales (package dependencies)
 
 These dependencies will be automatically installed when you install the package.
 
@@ -215,7 +215,7 @@ head(result$results_with_weights)
 
 ### 3. MRcML_family_dp()
 
-Bootstrap/Double-priming (DP) variance estimation version with visualization. Combines BIC model averaging with bootstrap-based uncertainty quantification.
+Gaussian data-perturbation (DP) variance estimation. The SNP set stays fixed while the GWAS summary effects are perturbed according to their covariance matrices, and the complete MRcML-Family model is refit for every perturbation.
 
 **Usage:**
 ```r
@@ -229,7 +229,8 @@ result <- MRcML_family_dp(
   T = 10,
   n = 1000,
   p = 1,
-  q = 1/3
+  q = 1/3,
+  random_seed = 42
 )
 ```
 
@@ -243,16 +244,16 @@ result <- MRcML_family_dp(
 | `beta_hat_out` | matrix (J x 3) | - | Outcome beta estimates |
 | `beta_sigma_exp` | list (3x3 matrices) | - | Exposure covariance matrices |
 | `beta_sigma_out` | list (3x3 matrices) | - | Outcome covariance matrices |
-| `T` | integer | 100 | Number of bootstrap replicates |
+| `T` | integer | 100 | Number of Gaussian data perturbations |
 | `n` | integer | 1000 | Sample size for BIC penalty |
 | `p` | numeric | 1 | Number of exposures |
 | `q` | numeric | 1/3 | Ratio parameter |
+| `beta_sigma_cross` | list of 3x3 matrices | NULL | Optional exposure-outcome cross-covariance matrices |
+| `random_seed` | integer or NULL | 0 | Reproducibility seed; `NULL` leaves the RNG state unchanged |
+| `min_success` | numeric in (0, 1] | 0.8 | Minimum successful perturbation fraction |
+| `return_details` | logical | FALSE | Return perturbation estimates and fit diagnostics |
 
-**Returns:** List with components:
-- `results`: Data frame with `alpha_bma`, `se_bma`, `p_value`
-- `theta_list`: Vector of bootstrap estimates
-- `plot_density`: Density plot of bootstrap distribution
-- `plot_bic`: BIC landscape heatmap
+**Returns:** By default, a data frame with `alpha_bma`, `se_bma`, and `p_value`. Diagnostics are available in the `dp_diagnostics` attribute. With `return_details = TRUE`, the result is a list containing the result data frame, successful-fit counts, and the perturbation estimates/errors.
 
 **Example:**
 ```r
@@ -262,7 +263,7 @@ library(MRcMLFamily)
 data <- generate_example_data(J = 10, seed = 789)
 n_snps <- nrow(data$beta_hat_exp)
 
-# Run MRcML-Family DP analysis with bootstrap
+# Run MRcML-Family DP analysis with Gaussian data perturbation
 result <- MRcML_family_dp(
   a_values = 1:n_snps,
   b_values = 0:n_snps,
@@ -270,22 +271,34 @@ result <- MRcML_family_dp(
   beta_hat_out = data$beta_hat_out,
   beta_sigma_exp = data$beta_sigma_exp,
   beta_sigma_out = data$beta_sigma_out,
-  T = 10,  # 10 bootstrap replicates (increase for real analysis)
+  T = 10,  # increase for final analyses
   n = 1000,
   p = 1,
-  q = 1/3
+  q = 1/3,
+  random_seed = 42
 )
 
 # Access results
-print(result$results)
+print(result)
 #   alpha_bma  se_bma p_value
 # 1    0.215   0.189   0.045
 
-# View bootstrap distribution
-print(result$plot_density)
+# Inspect perturbation diagnostics
+print(attr(result, "dp_diagnostics"))
 
-# View BIC landscape
-print(result$plot_bic)
+# Return all perturbation estimates and fit errors when needed
+details <- MRcML_family_dp(
+  a_values = 1:n_snps,
+  b_values = 0:n_snps,
+  beta_hat_exp = data$beta_hat_exp,
+  beta_hat_out = data$beta_hat_out,
+  beta_sigma_exp = data$beta_sigma_exp,
+  beta_sigma_out = data$beta_sigma_out,
+  T = 10,
+  random_seed = 42,
+  return_details = TRUE
+)
+details$perturbations$alpha_bma
 ```
 
 ---
@@ -294,7 +307,7 @@ print(result$plot_bic)
 
 - **a (horizontal pleiotropy)**: Number of top SNPs to select based on exposure statistics. Controls the degree of horizontal pleiotropy modeling.
 - **b (vertical pleiotropy)**: Number of top SNPs to select based on outcome statistics. Controls vertical pleiotropy modeling.
-- **T**: Number of bootstrap replicates for DP variance estimation. More replicates = more accurate variance but slower.
+- **T**: Number of Gaussian perturbations for DP variance estimation. More perturbations = more stable variance but slower.
 - **n**: Sample size for BIC penalty calculation
 - **p**: Number of exposures
 - **q**: Ratio parameter for model complexity penalty (default 1/3)
@@ -332,14 +345,12 @@ Returns a list:
 
 ### DP Version (`MRcML_family_dp()`)
 
-Returns a list:
-- `results`: Data frame with columns:
-  - `alpha_bma`: Causal effect estimate
-  - `se_bma`: DP-adjusted standard error
-  - `p_value`: Two-sided p-value
-- `theta_list`: Bootstrap estimates for diagnostic plots
-- `plot_density`: Density plot of bootstrap distribution
-- `plot_bic`: BIC landscape heatmap
+Returns a data frame with columns:
+- `alpha_bma`: Mean causal-effect estimate across perturbations
+- `se_bma`: Empirical standard deviation across perturbations
+- `p_value`: Two-sided p-value
+
+The `dp_diagnostics` attribute records the perturbation method, number of successful fits, and mean analytic standard error. Set `return_details = TRUE` to also receive all perturbation estimates and fit errors.
 
 ---
 
@@ -389,17 +400,15 @@ dp_result <- MRcML_family_dp(
   T = 10,
   n = 1000,
   p = 1,
-  q = 1/3
+  q = 1/3,
+  random_seed = 42
 )
 
 cat("\n=== MRcML-Family DP Results ===\n")
-print(dp_result$results)
+print(dp_result)
+print(attr(dp_result, "dp_diagnostics"))
 
-# 5. Visualize results
-print(dp_result$plot_density)
-print(dp_result$plot_bic)
-
-# 6. Find best model by BIC weight
+# 5. Find best model by BIC weight
 best_model <- standard_result$results_with_weights[
   which.max(standard_result$results_with_weights$weight),
 ]
@@ -418,7 +427,7 @@ The package implements:
 3. **Robust Estimation**: Multi-start strategies with BIC-weighted aggregation
 4. **Variance Estimation**: Fisher information-based standard errors
 5. **Bayesian Model Averaging**: Weighted combination across candidate models
-6. **Bootstrap/DP Variance**: Double-priming variance estimation for robust uncertainty quantification
+6. **Gaussian DP Variance**: Fixed-SNP summary-effect perturbation for robust uncertainty quantification
 
 ## License
 
