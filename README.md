@@ -312,13 +312,6 @@ details$perturbations$alpha_bma
 - **p**: Number of exposures
 - **q**: Ratio parameter for model complexity penalty (default 1/3)
 
-### Parameter Selection Guide
-
-- For small SNP sets (J < 50): Use `a_values = 1:J`, `b_values = 0:J`
-- For large SNP sets (J > 100): Use smaller grid, e.g., `a_values = c(5, 10, 20, 50)`, `b_values = c(0, 5, 10, 20)`
-- Larger a/b values increase model complexity; use BIC to select optimal
-- For DP version, `T = 100` is usually sufficient; increase to 200-500 for final analyses
-
 ---
 
 ## Output Interpretation
